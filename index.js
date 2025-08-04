@@ -1,94 +1,140 @@
 require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
+const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
-const axios = require('axios');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const port = process.env.PORT || 3000;
-const upload = multer({ dest: 'public/uploads/' });
+const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 
+const upload = multer({ dest: 'public/uploads/' });
 app.use('/public', express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
-// LINE Webhook
-app.post('/webhook', upload.none(), async (req, res) => {
-  const event = req.body.events?.[0];
-  if (!event || event.type !== 'message' || event.message.type !== 'image') {
-    return res.status(200).send('Not image type.');
-  }
-
-  const userId = event.source.userId;
-  const messageId = event.message.id;
-  console.log('📩 messageId:', messageId);
-
+app.post('/webhook', upload.single('image'), async (req, res) => {
   try {
-    const imageBuffer = await getImageFromLINE(messageId);
-    const filePath = saveImageToLocal(imageBuffer, messageId);
-    const publicUrl = `https://${process.env.DOMAIN}/public/uploads/${messageId}.jpg`;
+    const file = req.file;
+    const body = req.body;
+    const userId = body.userId;
 
-    const slipResult = await verifySlipWithSlipOK(publicUrl);
-    if (slipResult?.data?.verified) {
-      await replyMessage(userId, `✅ ตรวจสอบแล้ว: ได้รับเงินจาก ${slipResult.data.sender_name || 'ไม่ทราบชื่อ'} จำนวน ${slipResult.data.amount} บาท`);
+    if (!file || !userId) return res.status(400).send('Missing file or userId');
+
+    const fileName = `${uuidv4()}.jpg`;
+    const newPath = `public/uploads/${fileName}`;
+    fs.renameSync(file.path, newPath);
+
+    const publicUrl = `https://${process.env.DOMAIN}/public/uploads/${fileName}`;
+    console.log('📤 Uploaded File:', publicUrl);
+
+    // ส่งไปตรวจสอบกับ SlipOK
+    const slipResponse = await axios.post(
+      `https://api.slipok.com/api/line/apikey/${process.env.SLIPOK_BRANCH_ID}`,
+      { url: publicUrl },
+      {
+        headers: {
+          'x-authorization': process.env.SLIPOK_API_KEY,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    const result = slipResponse.data;
+    console.log('✅ SlipOK result:', result);
+
+    if (result?.data?.verified) {
+      // 📄 สร้างใบเสร็จ URL (จำลองเป็นภาพสลิปเลย)
+      const receiptImageUrl = publicUrl;
+
+      await replyFlexReceipt(userId, result.data, receiptImageUrl);
     } else {
-      await replyMessage(userId, '❌ สลิปไม่ถูกต้อง กรุณาส่งใหม่');
+      await replyText(userId, '❌ สลิปไม่ถูกต้อง กรุณาส่งใหม่อีกครั้ง');
     }
 
-    return res.status(200).send('OK');
+    res.status(200).send('OK');
+
   } catch (err) {
-    console.error('❌ ERROR:', err.message || err);
-    await replyMessage(userId, '❌ เกิดข้อผิดพลาดขณะตรวจสอบสลิป');
-    return res.status(500).send('Error');
+    console.error('❌ ERROR:', err.response?.data || err.message);
+    res.status(500).send('Error verifying slip.');
   }
 });
+
+async function replyText(userId, text) {
+  return axios.post('https://api.line.me/v2/bot/message/push', {
+    to: userId,
+    messages: [{ type: 'text', text }]
+  }, {
+    headers: {
+      Authorization: `Bearer ${LINE_TOKEN}`,
+      'Content-Type': 'application/json'
+    }
+  });
+}
+
+async function replyFlexReceipt(userId, slip, receiptUrl) {
+  const flexMessage = {
+    to: userId,
+    messages: [{
+      type: 'flex',
+      altText: 'ใบเสร็จรับเงินของคุณ',
+      contents: {
+        type: 'bubble',
+        hero: {
+          type: 'image',
+          url: receiptUrl,
+          size: 'full',
+          aspectRatio: '4:3',
+          aspectMode: 'fit'
+        },
+        body: {
+          type: 'box',
+          layout: 'vertical',
+          spacing: 'md',
+          contents: [
+            {
+              type: 'text',
+              text: '✅ รับเงินเรียบร้อย',
+              weight: 'bold',
+              size: 'lg',
+              color: '#1DB446'
+            },
+            {
+              type: 'text',
+              text: `จาก: ${slip.sender_name}\nจำนวน: ${slip.amount} บาท\nเวลา: ${slip.transaction_date}`,
+              wrap: true,
+              size: 'sm'
+            }
+          ]
+        },
+        footer: {
+          type: 'box',
+          layout: 'vertical',
+          spacing: 'sm',
+          contents: [{
+            type: 'button',
+            style: 'primary',
+            color: '#1DB446',
+            action: {
+              type: 'uri',
+              label: 'เปิดใบเสร็จ',
+              uri: receiptUrl
+            }
+          }]
+        }
+      }
+    }]
+  };
+
+  await axios.post('https://api.line.me/v2/bot/message/push', flexMessage, {
+    headers: {
+      Authorization: `Bearer ${LINE_TOKEN}`,
+      'Content-Type': 'application/json'
+    }
+  });
+}
 
 app.listen(port, () => {
   console.log(`✅ Server is running on port ${port}`);
 });
-
-// ดึงรูปจาก LINE
-async function getImageFromLINE(messageId) {
-  const url = `https://api-data.line.me/v2/bot/message/${messageId}/content`;
-  const response = await axios.get(url, {
-    responseType: 'arraybuffer',
-    headers: {
-      Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
-    }
-  });
-  return response.data;
-}
-
-// บันทึกภาพ
-function saveImageToLocal(buffer, name) {
-  const filePath = path.join(__dirname, 'public/uploads', `${name}.jpg`);
-  fs.writeFileSync(filePath, buffer);
-  return filePath;
-}
-
-// ตรวจสอบสลิป
-async function verifySlipWithSlipOK(imageUrl) {
-  const api = `https://api.slipok.com/api/line/apikey/${process.env.SLIPOK_BRANCH_ID}`;
-  const response = await axios.post(api, { url: imageUrl }, {
-    headers: {
-      'x-authorization': process.env.SLIPOK_API_KEY,
-      'Content-Type': 'application/json'
-    }
-  });
-  return response.data;
-}
-
-// ตอบกลับไลน์
-async function replyMessage(to, text) {
-  const payload = {
-    to,
-    messages: [{ type: 'text', text }]
-  };
-
-  await axios.post('https://api.line.me/v2/bot/message/push', payload, {
-    headers: {
-      Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
-      'Content-Type': 'application/json'
-    }
-  });
-}
