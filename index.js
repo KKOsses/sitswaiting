@@ -34,17 +34,22 @@ app.post('/webhook', upload.single('image'), async (req, res) => {
         }
       }
     );
-
     const data = response.data;
     console.log('✅ SlipOK Response:', data);
+    const userId = data.data?.userId || ''; // ตรวจสอบว่าได้ userId มาหรือไม่
+
+   if (data.code === 1009) {
+     await replyText(userId, '⚠️ช่วงเวลา23:00-02:00 เป็นเวลาปรับปรุงระบบธนาคาร ทำให้ไม่สามารถตรวจสอบสลิปได้\nกรุณาส่งใหม่อีกครั้งในภายหลัง');
+     return res.status(200).send('Bank unavailable');
+   }
 
     if (!data?.data?.verified) {
-      await replyText(data.data?.userId || '', '❌ ไม่สามารถตรวจสอบสลิปได้ กรุณาส่งใหม่อีกครั้ง');
+     await replyText(userId, '❌ สลิปไม่ถูกต้อง กรุณาส่งใหม่อีกครั้ง');
       return res.status(200).send('Slip not verified');
     }
 
     // ✅ สร้างใบเสร็จ (ข้อความแบบ Flex)
-    await replyFlexReceipt(data.data.userId, data.data, publicUrl);
+   await replyFlexReceipt(userId, data.data, publicUrl);
 
     res.status(200).json({ verified: true, data: data.data });
 
@@ -125,3 +130,4 @@ async function replyFlexReceipt(userId, slip, receiptImageUrl) {
     }
   );
 }
+
