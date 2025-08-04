@@ -8,5 +8,6 @@ export async function generateReceiptImage(slipData) {
   // 👇 ใช้ template PNG เปล่า (หรือสร้างใหม่เองได้)
   fs.copyFileSync('public/receipt-template.png', imagePath); // Replace this with dynamic drawing logic
 
-  return `https://your-render-url.onrender.com/public/uploads/${fileName}`;
+  return `https://sitswaiting.onrender.com/public/uploads/${fileName}`;
 }
+
