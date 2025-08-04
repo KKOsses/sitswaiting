@@ -51,7 +51,7 @@ app.post('/webhook', upload.single('file'), async (req, res) => {
     const imagePath = path.join(__dirname, 'public/uploads', fileName);
     fs.writeFileSync(imagePath, Buffer.from(imageResponse.data, 'binary'));
 
-    const slipUrl = `https://your-render-url.onrender.com/public/uploads/${fileName}`;
+    const slipUrl = `https://sitswaiting.onrender.com/public/uploads/${fileName}`;
 
     // 3. ส่งตรวจสอบกับ SlipOK
     const response = await axios.post(process.env.SLIPOK_API_ENDPOINT, { url: slipUrl });
@@ -115,3 +115,4 @@ async function pushFlexReceipt(to, slip, imageUrl) {
 app.listen(process.env.PORT || 3000, () => {
   console.log(`✅ Server is running on port ${process.env.PORT}`);
 });
+
